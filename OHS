@@ -1,0 +1,65 @@
+import os
+import requests
+
+LEGISCAN_API_KEY = os.getenv("LEGISCAN_API_KEY")
+BASE_URL = "https://api.legiscan.com/"
+
+KEYWORDS = [
+    "heat stress",
+    "heat illness",
+    "occupational safety",
+]
+
+def call_legiscan(op, params=None):
+    if params is None:
+        params = {}
+    params.update({"key": LEGISCAN_API_KEY, "op": op})
+    resp = requests.get(BASE_URL, params=params)
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("status") != "OK":
+        raise RuntimeError(f"LegiScan error: {data}")
+    return data
+
+def bill_matches(bill):
+    text_fields = [
+        bill.get("title", ""),
+        bill.get("description", ""),
+        bill.get("summary", ""),
+    ]
+    combined = " ".join(text_fields).lower()
+    return any(k in combined for k in KEYWORDS)
+
+def collect_for_state(state="NJ"):
+    # Example: get master list for a state
+    master = call_legiscan("getMasterList", {"state": state})
+    bills = master["masterlist"]
+
+    results = []
+
+    for bill_id, bill_meta in bills.items():
+        if bill_id == "session":  # masterlist includes a 'session' key
+            continue
+
+        bill_detail = call_legiscan("getBill", {"id": bill_meta["bill_id"]})["bill"]
+
+        if bill_matches(bill_detail):
+            results.append({
+                "bill_id": bill_detail["bill_id"],
+                "number": bill_detail["number"],
+                "state": bill_detail["state"],
+                "session": bill_detail["session"]["session_name"],
+                "title": bill_detail["title"],
+                "status": bill_detail["status"],
+                "url": bill_detail.get("url", ""),
+            })
+
+    return results
+
+if __name__ == "__main__":
+    matches = collect_for_state("NJ")
+    for m in matches:
+        print(
+            f"{m['state']} {m['number']} ({m['session']}): "
+            f"{m['title']} | status={m['status']} | {m['url']}"
+        )
